@@ -46,12 +46,23 @@ public class Main {
             }
 
             String path = requestParts[1];
+            String userAgent = null;
+
+
+            String headerLine;
+            while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
+                if (headerLine.startsWith("User-Agent: ")) {
+                    userAgent = headerLine.substring(12); // Remove "User-Agent: " prefix
+                }
+            }
 
 
             if (path.equals("/")) {
                 sendResponse(writer, 200, "OK", null);
             } else if (path.startsWith("/echo/")) {
                 handleEchoRequest(writer, path);
+            } else if (path.equals("/user-agent")) {
+                handleUserAgentRequest(writer, userAgent);
             } else {
                 sendErrorResponse(writer, 404, "Not Found");
             }
@@ -69,6 +80,13 @@ public class Main {
     private static void handleEchoRequest(PrintWriter writer, String path) {
         String echoStr = path.substring(6);
         sendResponse(writer, 200, "OK", echoStr);
+    }
+
+    private static void handleUserAgentRequest(PrintWriter writer, String userAgent) {
+        if (userAgent == null) {
+            userAgent = "";
+        }
+        sendResponse(writer, 200, "OK", userAgent);
     }
 
     private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body) {
