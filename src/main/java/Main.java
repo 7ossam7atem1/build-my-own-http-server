@@ -66,16 +66,22 @@ public class Main {
                 return;
             }
 
+            String method = requestParts[0];
             String path = requestParts[1];
             String userAgent = null;
+            int contentLength = 0;
 
+            // Read headers
             String headerLine;
             while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
                 if (headerLine.startsWith("User-Agent: ")) {
-                    userAgent = headerLine.substring(12); // Remove "User-Agent: " prefix
+                    userAgent = headerLine.substring(12);
+                } else if (headerLine.startsWith("Content-Length: ")) {
+                    contentLength = Integer.parseInt(headerLine.substring(16).trim());
                 }
             }
 
+            // Handle different endpoints
             if (path.equals("/")) {
                 sendResponse(writer, 200, "OK", null);
             } else if (path.startsWith("/echo/")) {
@@ -83,7 +89,13 @@ public class Main {
             } else if (path.equals("/user-agent")) {
                 handleUserAgentRequest(writer, userAgent);
             } else if (path.startsWith("/files/")) {
-                handleFileRequest(writer, path);
+                if (method.equals("GET")) {
+                    handleFileGetRequest(writer, path);
+                } else if (method.equals("POST")) {
+                    handleFilePostRequest(reader, writer, path, contentLength);
+                } else {
+                    sendErrorResponse(writer, 405, "Method Not Allowed");
+                }
             } else {
                 sendErrorResponse(writer, 404, "Not Found");
             }
@@ -110,25 +122,19 @@ public class Main {
         sendResponse(writer, 200, "OK", userAgent);
     }
 
-    private static void handleFileRequest(PrintWriter writer, String path) {
-        // Extract the filename from the path
+    private static void handleFileGetRequest(PrintWriter writer, String path) {
         String filename = path.substring(7); // Remove "/files/" prefix
 
         try {
-            // Construct the file path using the specified directory
             Path filePath = Paths.get(directory, filename);
 
-            // Check if the file exists
             if (!Files.exists(filePath) || Files.isDirectory(filePath)) {
                 sendErrorResponse(writer, 404, "Not Found");
                 return;
             }
 
-            // Read the file content
             byte[] fileContent = Files.readAllBytes(filePath);
             String content = new String(fileContent);
-
-            // Send the file content as the response with application/octet-stream content type
             sendFileResponse(writer, 200, "OK", content);
 
         } catch (IOException e) {
@@ -137,9 +143,27 @@ public class Main {
         }
     }
 
+    private static void handleFilePostRequest(BufferedReader reader, PrintWriter writer, String path, int contentLength) throws IOException {
+        String filename = path.substring(7); // Remove "/files/" prefix
+        Path filePath = Paths.get(directory, filename);
+
+        // Read the request body
+        char[] buffer = new char[contentLength];
+        int bytesRead = reader.read(buffer, 0, contentLength);
+        String fileContent = new String(buffer, 0, bytesRead);
+
+        try {
+            // Write the content to file
+            Files.write(filePath, fileContent.getBytes());
+            sendResponse(writer, 201, "Created", null);
+        } catch (IOException e) {
+            System.err.println("Error writing file: " + e.getMessage());
+            sendErrorResponse(writer, 500, "Internal Server Error");
+        }
+    }
+
     private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body) {
         StringBuilder response = new StringBuilder();
-
         response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
         if (body != null) {
@@ -159,7 +183,6 @@ public class Main {
 
     private static void sendFileResponse(PrintWriter writer, int statusCode, String statusText, String body) {
         StringBuilder response = new StringBuilder();
-
         response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
         if (body != null) {
