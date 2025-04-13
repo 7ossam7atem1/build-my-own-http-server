@@ -51,19 +51,16 @@ public class Main {
     }
 
     private static void handleRequest(Socket clientSocket) {
-        try (
-                BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-                PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)
-        ) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()))) {
             String requestLine = reader.readLine();
             if (requestLine == null || requestLine.isEmpty()) {
-                sendErrorResponse(writer, 400, "Bad Request");
+                sendErrorResponse(clientSocket, 400, "Bad Request");
                 return;
             }
 
             String[] requestParts = requestLine.split(" ");
             if (requestParts.length < 2) {
-                sendErrorResponse(writer, 400, "Bad Request");
+                sendErrorResponse(clientSocket, 400, "Bad Request");
                 return;
             }
 
@@ -87,21 +84,21 @@ public class Main {
 
             // Handle different endpoints
             if (path.equals("/")) {
-                sendResponse(writer, 200, "OK", null, acceptGzip);
+                sendResponse(clientSocket, 200, "OK", null, acceptGzip);
             } else if (path.startsWith("/echo/")) {
-                handleEchoRequest(writer, path, acceptGzip);
+                handleEchoRequest(clientSocket, path, acceptGzip);
             } else if (path.equals("/user-agent")) {
-                handleUserAgentRequest(writer, userAgent, acceptGzip);
+                handleUserAgentRequest(clientSocket, userAgent, acceptGzip);
             } else if (path.startsWith("/files/")) {
                 if (method.equals("GET")) {
-                    handleFileGetRequest(writer, path, acceptGzip);
+                    handleFileGetRequest(clientSocket, path, acceptGzip);
                 } else if (method.equals("POST")) {
-                    handleFilePostRequest(reader, writer, path, contentLength);
+                    handleFilePostRequest(reader, clientSocket, path, contentLength);
                 } else {
-                    sendErrorResponse(writer, 405, "Method Not Allowed");
+                    sendErrorResponse(clientSocket, 405, "Method Not Allowed");
                 }
             } else {
-                sendErrorResponse(writer, 404, "Not Found");
+                sendErrorResponse(clientSocket, 404, "Not Found");
             }
         } catch (IOException e) {
             System.err.println("Client error: " + e.getMessage());
@@ -114,103 +111,114 @@ public class Main {
         }
     }
 
-    private static void handleEchoRequest(PrintWriter writer, String path, boolean acceptGzip) {
+    private static void handleEchoRequest(Socket clientSocket, String path, boolean acceptGzip) throws IOException {
         String echoStr = path.substring(6);
-        sendResponse(writer, 200, "OK", echoStr, acceptGzip);
+        sendResponse(clientSocket, 200, "OK", echoStr, acceptGzip);
     }
 
-    private static void handleUserAgentRequest(PrintWriter writer, String userAgent, boolean acceptGzip) {
+    private static void handleUserAgentRequest(Socket clientSocket, String userAgent, boolean acceptGzip) throws IOException {
         if (userAgent == null) {
             userAgent = "";
         }
-        sendResponse(writer, 200, "OK", userAgent, acceptGzip);
+        sendResponse(clientSocket, 200, "OK", userAgent, acceptGzip);
     }
 
-    private static void handleFileGetRequest(PrintWriter writer, String path, boolean acceptGzip) {
-        String filename = path.substring(7); // Remove "/files/" prefix
-
+    private static void handleFileGetRequest(Socket clientSocket, String path, boolean acceptGzip) throws IOException {
+        String filename = path.substring(7);
         try {
             Path filePath = Paths.get(directory, filename);
-
             if (!Files.exists(filePath) || Files.isDirectory(filePath)) {
-                sendErrorResponse(writer, 404, "Not Found");
+                sendErrorResponse(clientSocket, 404, "Not Found");
                 return;
             }
-
             byte[] fileContent = Files.readAllBytes(filePath);
-            String content = new String(fileContent);
-            sendFileResponse(writer, 200, "OK", content, acceptGzip);
-
+            sendFileResponse(clientSocket, 200, "OK", fileContent, acceptGzip);
         } catch (IOException e) {
             System.err.println("Error reading file: " + e.getMessage());
-            sendErrorResponse(writer, 500, "Internal Server Error");
+            sendErrorResponse(clientSocket, 500, "Internal Server Error");
         }
     }
 
-    private static void handleFilePostRequest(BufferedReader reader, PrintWriter writer, String path, int contentLength) throws IOException {
-        String filename = path.substring(7); // Remove "/files/" prefix
+    private static void handleFilePostRequest(BufferedReader reader, Socket clientSocket, String path, int contentLength) throws IOException {
+        String filename = path.substring(7);
         Path filePath = Paths.get(directory, filename);
 
-        // Read the request body
         char[] buffer = new char[contentLength];
         int bytesRead = reader.read(buffer, 0, contentLength);
         String fileContent = new String(buffer, 0, bytesRead);
 
         try {
-            // Write the content to file
             Files.write(filePath, fileContent.getBytes());
-            sendResponse(writer, 201, "Created", null, false);
+            sendResponse(clientSocket, 201, "Created", null, false);
         } catch (IOException e) {
             System.err.println("Error writing file: " + e.getMessage());
-            sendErrorResponse(writer, 500, "Internal Server Error");
+            sendErrorResponse(clientSocket, 500, "Internal Server Error");
         }
     }
 
-    private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body, boolean useGzip) {
-        StringBuilder response = new StringBuilder();
-        response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
+    private static void sendResponse(Socket clientSocket, int statusCode, String statusText, String body, boolean useGzip) throws IOException {
+        OutputStream output = clientSocket.getOutputStream();
+        StringBuilder headerBuilder = new StringBuilder();
+        headerBuilder.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
+        byte[] bodyBytes = null;
         if (body != null) {
             if (useGzip) {
-                response.append("Content-Encoding: gzip\r\n");
+                ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+                try (GZIPOutputStream gzipStream = new GZIPOutputStream(byteStream)) {
+                    gzipStream.write(body.getBytes());
+                }
+                bodyBytes = byteStream.toByteArray();
+                headerBuilder.append("Content-Encoding: gzip\r\n");
+            } else {
+                bodyBytes = body.getBytes();
             }
-            response.append("Content-Type: text/plain\r\n");
-            response.append("Content-Length: ").append(body.length()).append("\r\n");
+            headerBuilder.append("Content-Type: text/plain\r\n");
+            headerBuilder.append("Content-Length: ").append(bodyBytes.length).append("\r\n");
         } else {
-            response.append("Content-Length: 0\r\n");
+            headerBuilder.append("Content-Length: 0\r\n");
         }
-        response.append("Connection: close\r\n\r\n");
+        headerBuilder.append("Connection: close\r\n\r\n");
 
-        if (body != null) {
-            response.append(body);
+        output.write(headerBuilder.toString().getBytes());
+        if (bodyBytes != null) {
+            output.write(bodyBytes);
         }
-
-        writer.print(response.toString());
+        output.flush();
     }
 
-    private static void sendFileResponse(PrintWriter writer, int statusCode, String statusText, String body, boolean useGzip) {
-        StringBuilder response = new StringBuilder();
-        response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
+    private static void sendFileResponse(Socket clientSocket, int statusCode, String statusText, byte[] body, boolean useGzip) throws IOException {
+        OutputStream output = clientSocket.getOutputStream();
+        StringBuilder headerBuilder = new StringBuilder();
+        headerBuilder.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
+        byte[] bodyBytes = null;
         if (body != null) {
             if (useGzip) {
-                response.append("Content-Encoding: gzip\r\n");
+                ByteArrayOutputStream byteStream = new ByteArrayOutputStream();
+                try (GZIPOutputStream gzipStream = new GZIPOutputStream(byteStream)) {
+                    gzipStream.write(body);
+                }
+                bodyBytes = byteStream.toByteArray();
+                headerBuilder.append("Content-Encoding: gzip\r\n");
+            } else {
+                bodyBytes = body;
             }
-            response.append("Content-Type: application/octet-stream\r\n");
-            response.append("Content-Length: ").append(body.length()).append("\r\n");
+            headerBuilder.append("Content-Type: application/octet-stream\r\n");
+            headerBuilder.append("Content-Length: ").append(bodyBytes.length).append("\r\n");
         } else {
-            response.append("Content-Length: 0\r\n");
+            headerBuilder.append("Content-Length: 0\r\n");
         }
-        response.append("Connection: close\r\n\r\n");
+        headerBuilder.append("Connection: close\r\n\r\n");
 
-        if (body != null) {
-            response.append(body);
+        output.write(headerBuilder.toString().getBytes());
+        if (bodyBytes != null) {
+            output.write(bodyBytes);
         }
-
-        writer.print(response.toString());
+        output.flush();
     }
 
-    private static void sendErrorResponse(PrintWriter writer, int statusCode, String statusText) {
-        sendResponse(writer, statusCode, statusText, null, false);
+    private static void sendErrorResponse(Socket clientSocket, int statusCode, String statusText) throws IOException {
+        sendResponse(clientSocket, statusCode, statusText, null, false);
     }
 }
