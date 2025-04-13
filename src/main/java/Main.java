@@ -19,7 +19,7 @@ public class Main {
         for (int i = 0; i < args.length; i++) {
             if (args[i].equals("--directory") && i + 1 < args.length) {
                 directory = args[i + 1];
-                i++; // Skip the next argument as we've already processed it
+                i++;
             } else if (args[i].startsWith("--directory=")) {
                 directory = args[i].substring("--directory=".length());
             } else {
@@ -41,7 +41,7 @@ public class Main {
 
             while (true) {
                 Socket clientSocket = serverSocket.accept();
-                threadPool.execute(() -> handleRequest(clientSocket));
+                threadPool.execute(() -> handleConnection(clientSocket));
             }
         } catch (IOException e) {
             System.err.println("Server error: " + e.getMessage());
@@ -50,55 +50,27 @@ public class Main {
         }
     }
 
-    private static void handleRequest(Socket clientSocket) {
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()))) {
-            String requestLine = reader.readLine();
-            if (requestLine == null || requestLine.isEmpty()) {
-                sendErrorResponse(clientSocket, 400, "Bad Request");
-                return;
-            }
+    private static void handleConnection(Socket clientSocket) {
+        try {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+            boolean keepAlive = true;
 
-            String[] requestParts = requestLine.split(" ");
-            if (requestParts.length < 2) {
-                sendErrorResponse(clientSocket, 400, "Bad Request");
-                return;
-            }
+            while (keepAlive) {
+                // Try to read the request line
+                String requestLine = reader.readLine();
 
-            String method = requestParts[0];
-            String path = requestParts[1];
-            String userAgent = null;
-            int contentLength = 0;
-            boolean acceptGzip = false;
-
-            // Read headers
-            String headerLine;
-            while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
-                if (headerLine.startsWith("User-Agent: ")) {
-                    userAgent = headerLine.substring(12);
-                } else if (headerLine.startsWith("Content-Length: ")) {
-                    contentLength = Integer.parseInt(headerLine.substring(16).trim());
-                } else if (headerLine.startsWith("Accept-Encoding: ")) {
-                    acceptGzip = headerLine.substring(17).contains("gzip");
+                // If we get null, the client has closed the connection
+                if (requestLine == null) {
+                    break;
                 }
-            }
 
-            // Handle different endpoints
-            if (path.equals("/")) {
-                sendResponse(clientSocket, 200, "OK", null, acceptGzip);
-            } else if (path.startsWith("/echo/")) {
-                handleEchoRequest(clientSocket, path, acceptGzip);
-            } else if (path.equals("/user-agent")) {
-                handleUserAgentRequest(clientSocket, userAgent, acceptGzip);
-            } else if (path.startsWith("/files/")) {
-                if (method.equals("GET")) {
-                    handleFileGetRequest(clientSocket, path, acceptGzip);
-                } else if (method.equals("POST")) {
-                    handleFilePostRequest(reader, clientSocket, path, contentLength);
-                } else {
-                    sendErrorResponse(clientSocket, 405, "Method Not Allowed");
+                // Skip empty lines
+                if (requestLine.trim().isEmpty()) {
+                    continue;
                 }
-            } else {
-                sendErrorResponse(clientSocket, 404, "Not Found");
+
+                // Process the request
+                keepAlive = handleRequest(clientSocket, reader, requestLine);
             }
         } catch (IOException e) {
             System.err.println("Client error: " + e.getMessage());
@@ -111,35 +83,90 @@ public class Main {
         }
     }
 
-    private static void handleEchoRequest(Socket clientSocket, String path, boolean acceptGzip) throws IOException {
-        String echoStr = path.substring(6);
-        sendResponse(clientSocket, 200, "OK", echoStr, acceptGzip);
+    private static boolean handleRequest(Socket clientSocket, BufferedReader reader, String requestLine) throws IOException {
+        if (requestLine == null || requestLine.isEmpty()) {
+            sendErrorResponse(clientSocket, 400, "Bad Request", true);
+            return false;
+        }
+
+        String[] requestParts = requestLine.split(" ");
+        if (requestParts.length < 2) {
+            sendErrorResponse(clientSocket, 400, "Bad Request", true);
+            return false;
+        }
+
+        String method = requestParts[0];
+        String path = requestParts[1];
+        String userAgent = null;
+        int contentLength = 0;
+        boolean acceptGzip = false;
+        boolean keepAlive = true;
+
+        // Read headers
+        String headerLine;
+        while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
+            if (headerLine.startsWith("User-Agent: ")) {
+                userAgent = headerLine.substring(12);
+            } else if (headerLine.startsWith("Content-Length: ")) {
+                contentLength = Integer.parseInt(headerLine.substring(16).trim());
+            } else if (headerLine.startsWith("Accept-Encoding: ")) {
+                acceptGzip = headerLine.substring(17).contains("gzip");
+            } else if (headerLine.equalsIgnoreCase("Connection: close")) {
+                keepAlive = false;
+            }
+        }
+
+        // Handle different endpoints
+        if (path.equals("/")) {
+            sendResponse(clientSocket, 200, "OK", null, acceptGzip, keepAlive);
+        } else if (path.startsWith("/echo/")) {
+            handleEchoRequest(clientSocket, path, acceptGzip, keepAlive);
+        } else if (path.equals("/user-agent")) {
+            handleUserAgentRequest(clientSocket, userAgent, acceptGzip, keepAlive);
+        } else if (path.startsWith("/files/")) {
+            if (method.equals("GET")) {
+                handleFileGetRequest(clientSocket, path, acceptGzip, keepAlive);
+            } else if (method.equals("POST")) {
+                handleFilePostRequest(reader, clientSocket, path, contentLength, keepAlive);
+            } else {
+                sendErrorResponse(clientSocket, 405, "Method Not Allowed", keepAlive);
+            }
+        } else {
+            sendErrorResponse(clientSocket, 404, "Not Found", keepAlive);
+        }
+
+        return keepAlive;
     }
 
-    private static void handleUserAgentRequest(Socket clientSocket, String userAgent, boolean acceptGzip) throws IOException {
+    private static void handleEchoRequest(Socket clientSocket, String path, boolean acceptGzip, boolean keepAlive) throws IOException {
+        String echoStr = path.substring(6);
+        sendResponse(clientSocket, 200, "OK", echoStr, acceptGzip, keepAlive);
+    }
+
+    private static void handleUserAgentRequest(Socket clientSocket, String userAgent, boolean acceptGzip, boolean keepAlive) throws IOException {
         if (userAgent == null) {
             userAgent = "";
         }
-        sendResponse(clientSocket, 200, "OK", userAgent, acceptGzip);
+        sendResponse(clientSocket, 200, "OK", userAgent, acceptGzip, keepAlive);
     }
 
-    private static void handleFileGetRequest(Socket clientSocket, String path, boolean acceptGzip) throws IOException {
+    private static void handleFileGetRequest(Socket clientSocket, String path, boolean acceptGzip, boolean keepAlive) throws IOException {
         String filename = path.substring(7);
         try {
             Path filePath = Paths.get(directory, filename);
             if (!Files.exists(filePath) || Files.isDirectory(filePath)) {
-                sendErrorResponse(clientSocket, 404, "Not Found");
+                sendErrorResponse(clientSocket, 404, "Not Found", keepAlive);
                 return;
             }
             byte[] fileContent = Files.readAllBytes(filePath);
-            sendFileResponse(clientSocket, 200, "OK", fileContent, acceptGzip);
+            sendFileResponse(clientSocket, 200, "OK", fileContent, acceptGzip, keepAlive);
         } catch (IOException e) {
             System.err.println("Error reading file: " + e.getMessage());
-            sendErrorResponse(clientSocket, 500, "Internal Server Error");
+            sendErrorResponse(clientSocket, 500, "Internal Server Error", keepAlive);
         }
     }
 
-    private static void handleFilePostRequest(BufferedReader reader, Socket clientSocket, String path, int contentLength) throws IOException {
+    private static void handleFilePostRequest(BufferedReader reader, Socket clientSocket, String path, int contentLength, boolean keepAlive) throws IOException {
         String filename = path.substring(7);
         Path filePath = Paths.get(directory, filename);
 
@@ -149,14 +176,14 @@ public class Main {
 
         try {
             Files.write(filePath, fileContent.getBytes());
-            sendResponse(clientSocket, 201, "Created", null, false);
+            sendResponse(clientSocket, 201, "Created", null, false, keepAlive);
         } catch (IOException e) {
             System.err.println("Error writing file: " + e.getMessage());
-            sendErrorResponse(clientSocket, 500, "Internal Server Error");
+            sendErrorResponse(clientSocket, 500, "Internal Server Error", keepAlive);
         }
     }
 
-    private static void sendResponse(Socket clientSocket, int statusCode, String statusText, String body, boolean useGzip) throws IOException {
+    private static void sendResponse(Socket clientSocket, int statusCode, String statusText, String body, boolean useGzip, boolean keepAlive) throws IOException {
         OutputStream output = clientSocket.getOutputStream();
         StringBuilder headerBuilder = new StringBuilder();
         headerBuilder.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
@@ -178,7 +205,11 @@ public class Main {
         } else {
             headerBuilder.append("Content-Length: 0\r\n");
         }
-        headerBuilder.append("Connection: close\r\n\r\n");
+
+        if (!keepAlive) {
+            headerBuilder.append("Connection: close\r\n");
+        }
+        headerBuilder.append("\r\n");
 
         output.write(headerBuilder.toString().getBytes());
         if (bodyBytes != null) {
@@ -187,7 +218,7 @@ public class Main {
         output.flush();
     }
 
-    private static void sendFileResponse(Socket clientSocket, int statusCode, String statusText, byte[] body, boolean useGzip) throws IOException {
+    private static void sendFileResponse(Socket clientSocket, int statusCode, String statusText, byte[] body, boolean useGzip, boolean keepAlive) throws IOException {
         OutputStream output = clientSocket.getOutputStream();
         StringBuilder headerBuilder = new StringBuilder();
         headerBuilder.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
@@ -209,7 +240,11 @@ public class Main {
         } else {
             headerBuilder.append("Content-Length: 0\r\n");
         }
-        headerBuilder.append("Connection: close\r\n\r\n");
+
+        if (!keepAlive) {
+            headerBuilder.append("Connection: close\r\n");
+        }
+        headerBuilder.append("\r\n");
 
         output.write(headerBuilder.toString().getBytes());
         if (bodyBytes != null) {
@@ -218,7 +253,7 @@ public class Main {
         output.flush();
     }
 
-    private static void sendErrorResponse(Socket clientSocket, int statusCode, String statusText) throws IOException {
-        sendResponse(clientSocket, statusCode, statusText, null, false);
+    private static void sendErrorResponse(Socket clientSocket, int statusCode, String statusText, boolean keepAlive) throws IOException {
+        sendResponse(clientSocket, statusCode, statusText, null, false, keepAlive);
     }
 }
