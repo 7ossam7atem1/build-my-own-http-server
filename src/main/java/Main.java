@@ -1,6 +1,9 @@
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -48,7 +51,6 @@ public class Main {
             String path = requestParts[1];
             String userAgent = null;
 
-
             String headerLine;
             while ((headerLine = reader.readLine()) != null && !headerLine.isEmpty()) {
                 if (headerLine.startsWith("User-Agent: ")) {
@@ -56,13 +58,14 @@ public class Main {
                 }
             }
 
-
             if (path.equals("/")) {
                 sendResponse(writer, 200, "OK", null);
             } else if (path.startsWith("/echo/")) {
                 handleEchoRequest(writer, path);
             } else if (path.equals("/user-agent")) {
                 handleUserAgentRequest(writer, userAgent);
+            } else if (path.startsWith("/files/")) {
+                handleFileRequest(writer, path);
             } else {
                 sendErrorResponse(writer, 404, "Not Found");
             }
@@ -89,12 +92,37 @@ public class Main {
         sendResponse(writer, 200, "OK", userAgent);
     }
 
+    private static void handleFileRequest(PrintWriter writer, String path) {
+        // Extract the filename from the path
+        String filename = path.substring(7); // Remove "/files/" prefix
+
+        try {
+            // Construct the file path
+            Path filePath = Paths.get(".", filename);
+
+            // Check if the file exists
+            if (!Files.exists(filePath) || Files.isDirectory(filePath)) {
+                sendErrorResponse(writer, 404, "Not Found");
+                return;
+            }
+
+            // Read the file content
+            byte[] fileContent = Files.readAllBytes(filePath);
+            String content = new String(fileContent);
+
+            // Send the file content as the response
+            sendResponse(writer, 200, "OK", content);
+
+        } catch (IOException e) {
+            System.err.println("Error reading file: " + e.getMessage());
+            sendErrorResponse(writer, 500, "Internal Server Error");
+        }
+    }
+
     private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body) {
         StringBuilder response = new StringBuilder();
 
-
         response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
-
 
         if (body != null) {
             response.append("Content-Type: text/plain\r\n");
@@ -103,7 +131,6 @@ public class Main {
             response.append("Content-Length: 0\r\n");
         }
         response.append("Connection: close\r\n\r\n");
-
 
         if (body != null) {
             response.append(body);
