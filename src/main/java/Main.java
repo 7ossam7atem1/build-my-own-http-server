@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.zip.GZIPOutputStream;
 
 public class Main {
     private static final int DEFAULT_PORT = 4221;
@@ -70,6 +71,7 @@ public class Main {
             String path = requestParts[1];
             String userAgent = null;
             int contentLength = 0;
+            boolean acceptGzip = false;
 
             // Read headers
             String headerLine;
@@ -78,19 +80,21 @@ public class Main {
                     userAgent = headerLine.substring(12);
                 } else if (headerLine.startsWith("Content-Length: ")) {
                     contentLength = Integer.parseInt(headerLine.substring(16).trim());
+                } else if (headerLine.startsWith("Accept-Encoding: ")) {
+                    acceptGzip = headerLine.substring(17).contains("gzip");
                 }
             }
 
             // Handle different endpoints
             if (path.equals("/")) {
-                sendResponse(writer, 200, "OK", null);
+                sendResponse(writer, 200, "OK", null, acceptGzip);
             } else if (path.startsWith("/echo/")) {
-                handleEchoRequest(writer, path);
+                handleEchoRequest(writer, path, acceptGzip);
             } else if (path.equals("/user-agent")) {
-                handleUserAgentRequest(writer, userAgent);
+                handleUserAgentRequest(writer, userAgent, acceptGzip);
             } else if (path.startsWith("/files/")) {
                 if (method.equals("GET")) {
-                    handleFileGetRequest(writer, path);
+                    handleFileGetRequest(writer, path, acceptGzip);
                 } else if (method.equals("POST")) {
                     handleFilePostRequest(reader, writer, path, contentLength);
                 } else {
@@ -110,19 +114,19 @@ public class Main {
         }
     }
 
-    private static void handleEchoRequest(PrintWriter writer, String path) {
+    private static void handleEchoRequest(PrintWriter writer, String path, boolean acceptGzip) {
         String echoStr = path.substring(6);
-        sendResponse(writer, 200, "OK", echoStr);
+        sendResponse(writer, 200, "OK", echoStr, acceptGzip);
     }
 
-    private static void handleUserAgentRequest(PrintWriter writer, String userAgent) {
+    private static void handleUserAgentRequest(PrintWriter writer, String userAgent, boolean acceptGzip) {
         if (userAgent == null) {
             userAgent = "";
         }
-        sendResponse(writer, 200, "OK", userAgent);
+        sendResponse(writer, 200, "OK", userAgent, acceptGzip);
     }
 
-    private static void handleFileGetRequest(PrintWriter writer, String path) {
+    private static void handleFileGetRequest(PrintWriter writer, String path, boolean acceptGzip) {
         String filename = path.substring(7); // Remove "/files/" prefix
 
         try {
@@ -135,7 +139,7 @@ public class Main {
 
             byte[] fileContent = Files.readAllBytes(filePath);
             String content = new String(fileContent);
-            sendFileResponse(writer, 200, "OK", content);
+            sendFileResponse(writer, 200, "OK", content, acceptGzip);
 
         } catch (IOException e) {
             System.err.println("Error reading file: " + e.getMessage());
@@ -155,18 +159,21 @@ public class Main {
         try {
             // Write the content to file
             Files.write(filePath, fileContent.getBytes());
-            sendResponse(writer, 201, "Created", null);
+            sendResponse(writer, 201, "Created", null, false);
         } catch (IOException e) {
             System.err.println("Error writing file: " + e.getMessage());
             sendErrorResponse(writer, 500, "Internal Server Error");
         }
     }
 
-    private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body) {
+    private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body, boolean useGzip) {
         StringBuilder response = new StringBuilder();
         response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
         if (body != null) {
+            if (useGzip) {
+                response.append("Content-Encoding: gzip\r\n");
+            }
             response.append("Content-Type: text/plain\r\n");
             response.append("Content-Length: ").append(body.length()).append("\r\n");
         } else {
@@ -181,11 +188,14 @@ public class Main {
         writer.print(response.toString());
     }
 
-    private static void sendFileResponse(PrintWriter writer, int statusCode, String statusText, String body) {
+    private static void sendFileResponse(PrintWriter writer, int statusCode, String statusText, String body, boolean useGzip) {
         StringBuilder response = new StringBuilder();
         response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
 
         if (body != null) {
+            if (useGzip) {
+                response.append("Content-Encoding: gzip\r\n");
+            }
             response.append("Content-Type: application/octet-stream\r\n");
             response.append("Content-Length: ").append(body.length()).append("\r\n");
         } else {
@@ -201,6 +211,6 @@ public class Main {
     }
 
     private static void sendErrorResponse(PrintWriter writer, int statusCode, String statusText) {
-        sendResponse(writer, statusCode, statusText, null);
+        sendResponse(writer, statusCode, statusText, null, false);
     }
 }
