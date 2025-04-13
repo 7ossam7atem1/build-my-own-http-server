@@ -9,10 +9,28 @@ import java.util.concurrent.Executors;
 
 public class Main {
     private static final int DEFAULT_PORT = 4221;
+    private static String directory = ".";
 
     public static void main(String[] args) {
-        int port = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
-        System.out.println("Server starting on port " + port);
+        int port = DEFAULT_PORT;
+
+        // Parse command line arguments
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("--directory") && i + 1 < args.length) {
+                directory = args[i + 1];
+                i++; // Skip the next argument as we've already processed it
+            } else if (args[i].startsWith("--directory=")) {
+                directory = args[i].substring("--directory=".length());
+            } else {
+                try {
+                    port = Integer.parseInt(args[i]);
+                } catch (NumberFormatException e) {
+                    System.err.println("Warning: Unrecognized argument: " + args[i]);
+                }
+            }
+        }
+
+        System.out.println("Server starting on port " + port + " with directory: " + directory);
 
         ExecutorService threadPool = Executors.newFixedThreadPool(10);
 
@@ -97,8 +115,8 @@ public class Main {
         String filename = path.substring(7); // Remove "/files/" prefix
 
         try {
-            // Construct the file path
-            Path filePath = Paths.get(".", filename);
+            // Construct the file path using the specified directory
+            Path filePath = Paths.get(directory, filename);
 
             // Check if the file exists
             if (!Files.exists(filePath) || Files.isDirectory(filePath)) {
@@ -110,8 +128,8 @@ public class Main {
             byte[] fileContent = Files.readAllBytes(filePath);
             String content = new String(fileContent);
 
-            // Send the file content as the response
-            sendResponse(writer, 200, "OK", content);
+            // Send the file content as the response with application/octet-stream content type
+            sendFileResponse(writer, 200, "OK", content);
 
         } catch (IOException e) {
             System.err.println("Error reading file: " + e.getMessage());
@@ -126,6 +144,26 @@ public class Main {
 
         if (body != null) {
             response.append("Content-Type: text/plain\r\n");
+            response.append("Content-Length: ").append(body.length()).append("\r\n");
+        } else {
+            response.append("Content-Length: 0\r\n");
+        }
+        response.append("Connection: close\r\n\r\n");
+
+        if (body != null) {
+            response.append(body);
+        }
+
+        writer.print(response.toString());
+    }
+
+    private static void sendFileResponse(PrintWriter writer, int statusCode, String statusText, String body) {
+        StringBuilder response = new StringBuilder();
+
+        response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
+
+        if (body != null) {
+            response.append("Content-Type: application/octet-stream\r\n");
             response.append("Content-Length: ").append(body.length()).append("\r\n");
         } else {
             response.append("Content-Length: 0\r\n");
