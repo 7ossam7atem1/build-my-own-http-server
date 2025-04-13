@@ -33,32 +33,30 @@ public class Main {
                 BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)
         ) {
-
             String requestLine = reader.readLine();
             if (requestLine == null || requestLine.isEmpty()) {
-                sendResponse(writer, 400, "Bad Request");
+                sendErrorResponse(writer, 400, "Bad Request");
                 return;
             }
-
 
             String[] requestParts = requestLine.split(" ");
             if (requestParts.length < 2) {
-                sendResponse(writer, 400, "Bad Request");
+                sendErrorResponse(writer, 400, "Bad Request");
                 return;
             }
 
-            String method = requestParts[0];
             String path = requestParts[1];
 
 
             if (path.equals("/")) {
-                sendResponse(writer, 200, "OK");
+                sendResponse(writer, 200, "OK", null);
+            } else if (path.startsWith("/echo/")) {
+                handleEchoRequest(writer, path);
             } else {
-                sendResponse(writer, 404, "Not Found");
+                sendErrorResponse(writer, 404, "Not Found");
             }
-
         } catch (IOException e) {
-            System.err.println("Client handling error: " + e.getMessage());
+            System.err.println("Client error: " + e.getMessage());
         } finally {
             try {
                 clientSocket.close();
@@ -68,15 +66,35 @@ public class Main {
         }
     }
 
-    private static void sendResponse(PrintWriter writer, int statusCode, String statusText) {
-        String response = String.format(
-                "HTTP/1.1 %d %s\r\n" +
-                        "Content-Length: 0\r\n" +
-                        "Connection: close\r\n" +
-                        "\r\n",
-                statusCode, statusText
-        );
-        writer.write(response);
-        writer.flush();
+    private static void handleEchoRequest(PrintWriter writer, String path) {
+        String echoStr = path.substring(6);
+        sendResponse(writer, 200, "OK", echoStr);
+    }
+
+    private static void sendResponse(PrintWriter writer, int statusCode, String statusText, String body) {
+        StringBuilder response = new StringBuilder();
+
+
+        response.append("HTTP/1.1 ").append(statusCode).append(" ").append(statusText).append("\r\n");
+
+
+        if (body != null) {
+            response.append("Content-Type: text/plain\r\n");
+            response.append("Content-Length: ").append(body.length()).append("\r\n");
+        } else {
+            response.append("Content-Length: 0\r\n");
+        }
+        response.append("Connection: close\r\n\r\n");
+
+
+        if (body != null) {
+            response.append(body);
+        }
+
+        writer.print(response.toString());
+    }
+
+    private static void sendErrorResponse(PrintWriter writer, int statusCode, String statusText) {
+        sendResponse(writer, statusCode, statusText, null);
     }
 }
